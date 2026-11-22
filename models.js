@@ -1,46 +1,66 @@
-import mongoose from 'mongoose';
+// In-memory data store (replaces MongoDB). Data lives in RAM and resets on restart.
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/dsa_insights';
+const users = new Map(); // userId -> user
+const codes = new Map(); // `${userId}|${problemId}|${language}` -> { userId, problemId, language, code }
 
-let connected = false;
-
-export async function connectDB() {
-  if (connected) return;
-  try {
-    await mongoose.connect(MONGO_URI);
-    connected = true;
-    console.log('MongoDB connected');
-  } catch (err) {
-    console.error('MongoDB connection error:', err.message);
-    console.log('Running without database — data will use localStorage fallback');
-  }
+export function connectDB() {
+  console.log('Using in-memory store (no database)');
 }
 
 export function isConnected() {
-  return connected;
+  return true;
 }
 
-const userSchema = new mongoose.Schema({
-  userId: { type: String, required: true, unique: true, index: true },
-  name: { type: String, default: 'User' },
-  email: { type: String, default: '' },
-  profile: {
-    totalSolved: { type: Number, default: 0 },
-    currentStreak: { type: Number, default: 0 },
-    lastActiveDate: { type: String, default: '' },
-    dailyHistory: [{ date: String, solved: Number }],
+function newUser(userId, name = 'User') {
+  const now = new Date().toISOString();
+  return {
+    userId,
+    name,
+    email: '',
+    profile: { totalSolved: 0, currentStreak: 0, lastActiveDate: '', dailyHistory: [] },
+    solvedProblems: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export const store = {
+  getUser(userId) {
+    return users.get(userId) || null;
   },
-  solvedProblems: [{ type: Number }],
-}, { timestamps: true });
-
-const codeSchema = new mongoose.Schema({
-  userId: { type: String, required: true, index: true },
-  problemId: { type: Number, required: true },
-  language: { type: String, required: true },
-  code: { type: String, default: '' },
-}, { timestamps: true });
-
-codeSchema.index({ userId: 1, problemId: 1, language: 1 }, { unique: true });
-
-export const User = mongoose.model('User', userSchema);
-export const Code = mongoose.model('Code', codeSchema);
+  getOrCreateUser(userId, name) {
+    let u = users.get(userId);
+    if (!u) {
+      u = newUser(userId, name || 'User');
+      users.set(userId, u);
+    }
+    return u;
+  },
+  updateUser(userId, { name, email, profile }) {
+    const u = this.getOrCreateUser(userId);
+    if (name !== undefined) u.name = name;
+    if (email !== undefined) u.email = email;
+    if (profile !== undefined) u.profile = { ...u.profile, ...profile };
+    u.updatedAt = new Date().toISOString();
+    return u;
+  },
+  addSolved(userId, problemId) {
+    const u = this.getOrCreateUser(userId);
+    if (!u.solvedProblems.includes(problemId)) u.solvedProblems.push(problemId);
+    u.updatedAt = new Date().toISOString();
+    return u;
+  },
+  leaderboard(limit = 50) {
+    return [...users.values()]
+      .sort((a, b) =>
+        (b.profile.totalSolved - a.profile.totalSolved) ||
+        (b.profile.currentStreak - a.profile.currentStreak))
+      .slice(0, limit);
+  },
+  saveCode(userId, problemId, language, code) {
+    codes.set(`${userId}|${problemId}|${language}`, { userId, problemId, language, code });
+  },
+  getCode(userId, problemId, language) {
+    return codes.get(`${userId}|${problemId}|${language}`)?.code || '';
+  },
+};

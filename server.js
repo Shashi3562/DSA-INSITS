@@ -11,7 +11,7 @@ import { tmpdir } from 'os';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import Groq from 'groq-sdk';
 import multer from 'multer';
-import { connectDB, User, Code, isConnected } from './models.js';
+import { connectDB, store } from './models.js';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY || '' });
@@ -471,117 +471,68 @@ app.post('/api/interview/speech-to-text', upload.single('audio'), async (req, re
   }
 });
 
-// ============ MongoDB API Routes ============
+// ============ In-memory API Routes ============
 
 app.get('/api/db/status', (req, res) => {
-  res.json({ connected: isConnected() });
+  res.json({ connected: true, store: 'memory' });
 });
 
 // Get or create user profile
-app.get('/api/user/:userId', async (req, res) => {
-  if (!isConnected()) return res.json({ fallback: true });
-  try {
-    let user = await User.findOne({ userId: req.params.userId });
-    if (!user) {
-      user = await User.create({ userId: req.params.userId, name: req.body.name || 'User' });
-    }
-    res.json({ user });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+app.get('/api/user/:userId', (req, res) => {
+  const user = store.getOrCreateUser(req.params.userId, req.query.name);
+  res.json({ user });
 });
 
 // Update user profile
-app.put('/api/user/:userId', async (req, res) => {
-  if (!isConnected()) return res.json({ fallback: true });
-  try {
-    const user = await User.findOneAndUpdate(
-      { userId: req.params.userId },
-      { $set: { name: req.body.name, email: req.body.email, profile: req.body.profile } },
-      { new: true, upsert: true }
-    );
-    res.json({ user });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+app.put('/api/user/:userId', (req, res) => {
+  const user = store.updateUser(req.params.userId, req.body || {});
+  res.json({ user });
+});
+
+// Partial update of user profile
+app.patch('/api/user/:userId', (req, res) => {
+  const user = store.updateUser(req.params.userId, req.body || {});
+  res.json({ user });
 });
 
 // Get solved problems
-app.get('/api/user/:userId/solved', async (req, res) => {
-  if (!isConnected()) return res.json({ fallback: true });
-  try {
-    const user = await User.findOne({ userId: req.params.userId });
-    res.json({ solved: user?.solvedProblems || [] });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+app.get('/api/user/:userId/solved', (req, res) => {
+  res.json({ solved: store.getUser(req.params.userId)?.solvedProblems || [] });
 });
 
 // Mark problem as solved
-app.post('/api/user/:userId/solved', async (req, res) => {
-  if (!isConnected()) return res.json({ fallback: true });
-  try {
-    const { problemId } = req.body;
-    const user = await User.findOneAndUpdate(
-      { userId: req.params.userId },
-      { $addToSet: { solvedProblems: problemId } },
-      { new: true, upsert: true }
-    );
-    res.json({ solved: user.solvedProblems });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+app.post('/api/user/:userId/solved', (req, res) => {
+  const { problemId } = req.body || {};
+  if (problemId === undefined) return res.status(400).json({ error: 'problemId required' });
+  const user = store.addSolved(req.params.userId, problemId);
+  res.json({ solved: user.solvedProblems });
 });
 
 // Get leaderboard
-app.get('/api/leaderboard', async (req, res) => {
-  if (!isConnected()) return res.json({ fallback: true });
-  try {
-    const users = await User.find({}).sort({ 'profile.totalSolved': -1, 'profile.currentStreak': -1 }).limit(50);
-    const leaderboard = users.map(u => ({
-      name: u.name,
-      solved: u.profile.totalSolved,
-      streak: u.profile.currentStreak,
-      userId: u.userId,
-    }));
-    res.json({ leaderboard });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+app.get('/api/leaderboard', (req, res) => {
+  const leaderboard = store.leaderboard(50).map(u => ({
+    name: u.name,
+    solved: u.profile.totalSolved,
+    streak: u.profile.currentStreak,
+    userId: u.userId,
+  }));
+  res.json({ leaderboard });
 });
 
 // Save code
-app.put('/api/user/:userId/code', async (req, res) => {
-  if (!isConnected()) return res.json({ fallback: true });
-  try {
-    const { problemId, language, code } = req.body;
-    await Code.findOneAndUpdate(
-      { userId: req.params.userId, problemId, language },
-      { $set: { code } },
-      { upsert: true }
-    );
-    res.json({ saved: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+app.put('/api/user/:userId/code', (req, res) => {
+  const { problemId, language, code } = req.body || {};
+  store.saveCode(req.params.userId, problemId, language, code);
+  res.json({ saved: true });
 });
 
 // Get saved code
-app.get('/api/user/:userId/code/:problemId/:language', async (req, res) => {
-  if (!isConnected()) return res.json({ fallback: true });
-  try {
-    const doc = await Code.findOne({
-      userId: req.params.userId,
-      problemId: parseInt(req.params.problemId),
-      language: req.params.language,
-    });
-    res.json({ code: doc?.code || '' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+app.get('/api/user/:userId/code/:problemId/:language', (req, res) => {
+  const { userId, problemId, language } = req.params;
+  res.json({ code: store.getCode(userId, parseInt(problemId), language) });
 });
 
-// ============ End MongoDB Routes ============
+// ============ End In-memory Routes ============
 
 app.use((req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
