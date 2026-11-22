@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: dsa-insights
+    runtime: node
+    plan: free
+    buildCommand: npm install --include=dev && npm run build:web
+    startCommand: npm start
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: VITE_CLERK_PUBLISHABLE_KEY
+        sync: false
