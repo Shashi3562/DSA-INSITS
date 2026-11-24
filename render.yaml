@@ -1,12 +1,13 @@
 services:
   - type: web
     name: dsa-insights
-    runtime: node
+    runtime: docker
     plan: free
-    buildCommand: npm install --include=dev && npm run build:web
-    startCommand: npm start
+    healthCheckPath: /api/health
     envVars:
       - key: GROQ_API_KEY
         sync: false
       - key: VITE_CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: MONGO_URI
         sync: false
